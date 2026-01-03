@@ -8,6 +8,11 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from .models import Exeat, Student, HouseMistress, House
 from .serializers import ExeatSerializer, StudentSerializer, HouseMistressSerializer, HouseSerializer
+from django.contrib.auth import authenticate, login, logout
+from django.shortcuts import render, redirect
+from exeat_app.models import CustomUser
+
+
 
 class ExeatForm(forms.ModelForm):
     class Meta:
@@ -28,6 +33,59 @@ class HouseForm(forms.ModelForm):
     class Meta:
         model = House
         fields = ['name', 'description']
+
+
+
+
+def login_view(request):
+    if request.method == 'POST':
+        username = request.POST['username']
+        password = request.POST['password']
+        user = authenticate(request, username=username, password=password)
+        if user:
+            login(request, user)
+            if user.is_superuser or user.is_staff:
+                return redirect('admin')
+            elif hasattr(user, 'role') and user.role == 'staff':
+                return redirect('staff-dashboard')
+            elif hasattr(user, 'role') and user.role == 'student':
+                return redirect('student-dashboard')
+            elif hasattr(user, 'role') and user.role == 'subadmin':
+                return redirect('subadmin-dashboard')
+        else:
+            return render(request, 'auth/login.html', {'error': 'Invalid credentials'})
+    return render(request, 'auth/login.html')
+
+
+
+def logout_view(request):
+    logout(request)
+    return redirect('login')
+
+
+
+
+def PasswordResetView(request):
+    if request.method == 'POST':
+        email = request.POST['email']
+        try:
+            user = User.objects.get(email=email)
+            new_password = User.objects.make_random_password()
+            user.set_password(new_password)
+            user.save()
+            from django.core.mail import send_mail
+            send_mail(
+                'Password Reset',
+                f'Your new password is: {new_password}',
+                '<EMAIL>',
+                [email],            
+                fail_silently=False,
+            )
+            return render(request, 'auth/password_reset.html', {'message': 'Password reset. Check your email.'})
+        except User.DoesNotExist:
+            return render(request, 'auth/password_reset.html', {'error': 'Email not found'})
+    return render(request, 'auth/password_reset.html')
+
 
 @login_required
 def exeat_list(request):
@@ -265,3 +323,51 @@ class HouseViewSet(viewsets.ModelViewSet):
     queryset = House.objects.all()
     serializer_class = HouseSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+
+class LoginViewSet(viewsets.ViewSet):
+    permission_classes = [permissions.AllowAny]
+
+    @action(detail=False, methods=['post'])
+    def login(self, request):
+        username = request.data.get('username')
+        password = request.data.get('password')
+        user = authenticate(request, username=username, password=password)
+        if user:
+            login(request, user)
+            return Response({'status': 'logged in'})
+        return Response({'error': 'Invalid credentials'}, status=400)
+    
+
+
+class LogoutViewSet(viewsets.ViewSet):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @action(detail=False, methods=['post'])
+    def logout(self, request):
+        logout(request)
+        return Response({'status': 'logged out'})
+    
+class PasswordResetViewSet(viewsets.ViewSet):
+    permission_classes = [permissions.AllowAny]
+
+    @action(detail=False, methods=['post'])
+    def reset(self, request):
+        email = request.data.get('email')
+        try:
+            user = User.objects.get(email=email)
+            new_password = User.objects.make_random_password()
+            user.set_password(new_password)
+            user.save()
+            from django.core.mail import send_mail
+            send_mail(
+                'Password Reset',
+                f'Your new password is: {new_password}',
+                '<EMAIL>',
+                [email],    
+                fail_silently=False,
+            )       
+            return Response({'status': 'Password reset. Check your email.'})
+        except User.DoesNotExist:
+            return Response({'error': 'Email not found'}, status=400)
+        
