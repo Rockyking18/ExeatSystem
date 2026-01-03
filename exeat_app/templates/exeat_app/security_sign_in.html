@@ -1,0 +1,15 @@
+{% extends 'base.html' %}
+
+{% block title %}Sign In Student{% endblock %}
+
+{% block content %}
+<h1>Sign In Student</h1>
+<form method="post">
+    {% csrf_token %}
+    <div class="mb-3">
+        <label for="signed_in_by" class="form-label">Signed In By</label>
+        <input type="text" class="form-control" id="signed_in_by" name="signed_in_by" required>
+    </div>
+    <button type="submit" class="btn btn-primary">Sign In</button>
+</form>
+{% endblock %}

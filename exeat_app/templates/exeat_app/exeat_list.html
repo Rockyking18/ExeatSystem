@@ -1,0 +1,79 @@
+{% extends 'base.html' %}
+
+{% block title %}Exeat List{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1>Exeat Requests</h1>
+    <div>
+        <a href="{% url 'exeat_create' %}" class="btn btn-primary">Create New Exeat</a>
+        {% if user.is_staff %}
+            <a href="{% url 'add_student' %}" class="btn btn-secondary">Add Student</a>
+            <a href="{% url 'add_house_mistress' %}" class="btn btn-secondary">Add House Mistress</a>
+            <a href="{% url 'add_house' %}" class="btn btn-secondary">Add House</a>
+        {% endif %}
+    </div>
+</div>
+
+{% if user.is_staff %}
+<div class="row mb-4">
+    <div class="col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <h5 class="card-title">Total Exeats</h5>
+                <h2 class="text-primary">{{ total_exeats }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <h5 class="card-title">Approved</h5>
+                <h2 class="text-success">{{ approved_exeats }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <h5 class="card-title">Rejected</h5>
+                <h2 class="text-danger">{{ rejected_exeats }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <h5 class="card-title">Pending</h5>
+                <h2 class="text-warning">{{ pending_exeats }}</h2>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<div class="row">
+    {% for exeat in exeats %}
+    <div class="col-md-4 mb-4">
+        <div class="card {% if exeat.is_overdue %}border-danger{% endif %}">
+            <div class="card-body">
+                <h5 class="card-title">{{ exeat.student.name }}</h5>
+                <p class="card-text">Reason: {{ exeat.reason }}</p>
+                <p class="card-text">Status: <span class="badge bg-{% if exeat.status == 'approved' %}success{% elif exeat.status == 'rejected' %}danger{% else %}warning{% endif %}">{{ exeat.status }}</span></p>
+                {% if exeat.is_overdue %}
+                    <p class="text-danger"><strong>OVERDUE</strong></p>
+                {% endif %}
+                <a href="{% url 'exeat_detail' exeat.pk %}" class="btn btn-outline-primary">View Details</a>
+                {% if user.is_staff and exeat.status == 'pending' %}
+                    <a href="{% url 'exeat_approve' exeat.pk %}" class="btn btn-success ms-2">Approve</a>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% empty %}
+    <div class="col-12">
+        <p>No exeats found.</p>
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}

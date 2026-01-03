@@ -1,0 +1,12 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "runserver",
+			"type": "shell",
+			"command": "& \"C:/Users/HP ELITEBOOK/Documents/exeat-full-sc/Django exeat/.venv/Scripts/python.exe\" manage.py runserver",
+			"isBackground": true,
+			"group": "run"
+		}
+	]
+}
