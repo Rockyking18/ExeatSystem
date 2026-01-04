@@ -1,3 +1,4 @@
+from time import timezone
 from django.db import models
 from django.contrib.auth.models import  AbstractUser, User
 from exeat.settings import AUTH_USER_MODEL
@@ -63,7 +64,6 @@ class Exeat(models.Model):
         if self.status == 'signed_out' and timezone.now() > self.end_date:
             return True
         return False
-    
 
 class CustomUser(AbstractUser):
     ROLE_CHOICES = (
@@ -72,3 +72,31 @@ class CustomUser(AbstractUser):
         ('subadmin', 'Sub Admin'),
     )
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='student')
+    groups = models.ManyToManyField(
+        'auth.Group',
+        related_name='customuser_set',
+        blank=True,
+        help_text='The groups this user belongs to.',
+        verbose_name='groups'
+    )
+
+    user_permissions = models.ManyToManyField(
+        'auth.Permission',
+        related_name='customuser_permissions',
+        blank=True,
+        help_text='Specific permissions for this user.',
+        verbose_name='user permissions'
+    )
+    otp = models.CharField(max_length=6, blank=True, null=True)
+    otp_created_at = models.DateTimeField(null=True, blank=True)
+
+    def set_otp(self, code):
+        self.otp = code
+        self.otp_created_at = timezone.now()
+        self.save()
+    
+    def is_otp_valid(self):
+        if self.otp_created_at:
+            # OTP valid for 5 minutes (adjust as needed)
+            return (timezone.now() - self.otp_created_at) < timezone.timedelta(minutes=5)
+        return False

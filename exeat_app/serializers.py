@@ -30,3 +30,24 @@ class ExeatSerializer(serializers.ModelSerializer):
     class Meta:
         model = Exeat
         fields = '__all__'
+
+class ForgotPasswordSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    
+class PasswordResetSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    otp = serializers.CharField(max_length=6)
+    new_password = serializers.CharField(min_length=8)
+
+
+class APISuccessResponseStructureSerializer(serializers.Serializer):
+    """Standard structure for API success responses"""
+    status = serializers.IntegerField()
+    message = serializers.CharField()
+    data = serializers.JSONField()
+
+class APIErrorResponseStructureSerializer(serializers.Serializer):
+    """Standard structure for API error responses"""
+    status = serializers.IntegerField()
+    message = serializers.CharField()
+    errors = serializers.JSONField()

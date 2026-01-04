@@ -1,16 +1,23 @@
+from linecache import cache
+from urllib import request
 from django import forms
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import User
 from django.shortcuts import render, redirect, get_object_or_404
 from django.utils import timezone
-from rest_framework import viewsets, permissions
+from rest_framework import viewsets, permissions, status, views
+from rest_framework.views import APIView
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from .models import Exeat, Student, HouseMistress, House
-from .serializers import ExeatSerializer, StudentSerializer, HouseMistressSerializer, HouseSerializer
+from .serializers import APIErrorResponseStructureSerializer, APISuccessResponseStructureSerializer, ExeatSerializer, StudentSerializer, HouseMistressSerializer, HouseSerializer, ForgotPasswordSerializer, PasswordResetSerializer    
 from django.contrib.auth import authenticate, login, logout
+from django.core.mail import send_mail
+import random
 from django.shortcuts import render, redirect
-from exeat_app.models import CustomUser
+from .models import CustomUser
+from exeat.settings import AUTH_USER_MODEL
+AUTH_USER_MODEL
 
 
 
@@ -36,25 +43,25 @@ class HouseForm(forms.ModelForm):
 
 
 
-
-def login_view(request):
-    if request.method == 'POST':
-        username = request.POST['username']
-        password = request.POST['password']
-        user = authenticate(request, username=username, password=password)
-        if user:
-            login(request, user)
-            if user.is_superuser or user.is_staff:
-                return redirect('admin')
-            elif hasattr(user, 'role') and user.role == 'staff':
-                return redirect('staff-dashboard')
-            elif hasattr(user, 'role') and user.role == 'student':
-                return redirect('student-dashboard')
-            elif hasattr(user, 'role') and user.role == 'subadmin':
-                return redirect('subadmin-dashboard')
-        else:
-            return render(request, 'auth/login.html', {'error': 'Invalid credentials'})
-    return render(request, 'auth/login.html')
+class LoginView(request):
+    def post(self, request):
+        if request.method == 'POST':
+            username = request.POST['username']
+            password = request.POST['password']
+            user = authenticate(request, username=username, password=password)
+            if user:
+                login(request, user)
+                if user.is_superuser or user.is_staff:
+                    return redirect('admin')
+                elif hasattr(user, 'role') and user.role == 'staff':
+                    return redirect('staff-dashboard')
+                elif hasattr(user, 'role') and user.role == 'student':
+                    return redirect('student-dashboard')
+                elif hasattr(user, 'role') and user.role == 'subadmin':
+                    return redirect('subadmin-dashboard')
+            else:
+                return render(request, 'auth/login.html', {'error': 'Invalid credentials'})
+        return render(request, 'auth/login.html')
 
 
 
@@ -62,29 +69,88 @@ def logout_view(request):
     logout(request)
     return redirect('login')
 
+    
 
 
 
-def PasswordResetView(request):
-    if request.method == 'POST':
-        email = request.POST['email']
+class ForgotPasswordView(request):
+    def post(self, request):
+        serializer = ForgotPasswordSerializer(data=request.data)
+        if serializer.is_valid():
+            email = serializer.validated_data['email']
         try:
-            user = User.objects.get(email=email)
-            new_password = User.objects.make_random_password()
-            user.set_password(new_password)
-            user.save()
-            from django.core.mail import send_mail
+            user = CustomUser.objects.get(email=email)
+            otp = str(random.randint(100000, 999999))
+            request.session['reset_email'] = email
+            request.session['reset_otp'] = otp
+
             send_mail(
-                'Password Reset',
-                f'Your new password is: {new_password}',
-                '<EMAIL>',
-                [email],            
+                'Your Password Reset OTP',
+                f'Use this OTP to reset your password: {otp}',
+                'noreply@example.com',
+                [email],
                 fail_silently=False,
             )
-            return render(request, 'auth/password_reset.html', {'message': 'Password reset. Check your email.'})
+            return redirect('verify_otp') 
         except User.DoesNotExist:
-            return render(request, 'auth/password_reset.html', {'error': 'Email not found'})
-    return render(request, 'auth/password_reset.html')
+            return Response(
+                APIErrorResponseStructureSerializer({
+                    "status": 400,
+                    "message": "Email not found",
+                    "errors": ["No user is associated with this email address."]
+                }).data,
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+
+class ResetPasswordView(request):
+    def post(self, request):
+        serializer = PasswordResetSerializer(data=request.data)
+        if serializer.is_valid():
+            entered_otp = request.POST['otp']
+        session_otp = request.session.get('reset_otp')
+        email = request.session.get('reset_email')
+
+        if entered_otp == session_otp and email:
+            if not session_otp:
+                error_data = {
+                "status": 400,
+                "message": "OTP expired or not found",
+                "errors": ["Your reset code has expired. Please request a new one."]
+                }
+            return Response(
+                APIErrorResponseStructureSerializer(error_data).data,
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if entered_otp != session_otp:
+            error_data = {
+                "status": 400,
+                "message": "Invalid OTP",
+                "errors": ["The reset code you entered is incorrect. Please check and try again."]
+            }
+            return Response(
+                APIErrorResponseStructureSerializer(error_data).data,
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        cache.delete(f"reset_otp_{User.email}")
+
+        response_data = {
+                "status": 200,
+                "message": "Password successfully reset",
+                "data": {
+                    "message": "You can now login with your new password"
+                }
+            }
+        return Response(
+                APISuccessResponseStructureSerializer(response_data).data,
+                status=status.HTTP_200_OK
+            )
+
+    error_data = {
+        "status": 400,
+        "message": "Password reset failed",
+        "errors": ""
+    }
 
 
 @login_required
@@ -141,61 +207,62 @@ def exeat_approve(request, pk):
         exeat.save()
     return redirect('exeat_list')
 
-@login_required
-def add_student(request):
-    if not request.user.is_staff:
-        return redirect('exeat_list')
-    if request.method == 'POST':
-        form = StudentForm(request.POST)
-        if form.is_valid():
-            student = form.save(commit=False)
-            # Create user
-            username = student.student_id  # Use student_id as username
-            password = User.objects.make_random_password()
-            user = User.objects.create_user(username=username, email=student.email, password=password)
-            student.user = user
-            student.save()
-            # Send email
-            from django.core.mail import send_mail
-            send_mail(
-                'Your Account Details',
-                f'Username: {username}\nPassword: {password}',
-                'admin@example.com',
-                [student.email],
-                fail_silently=False,
-            )
-            return redirect('exeat_list')
-    else:
-        form = StudentForm()
-    return render(request, 'exeat_app/add_student.html', {'form': form})
 
 @login_required
-def add_house_mistress(request):
-    if not request.user.is_staff:
-        return redirect('exeat_list')
-    if request.method == 'POST':
-        form = HouseMistressForm(request.POST)
-        if form.is_valid():
-            house_mistress = form.save(commit=False)
-            # Create user
-            username = house_mistress.name.lower().replace(' ', '_')  # Simple username
-            password = User.objects.make_random_password()
-            user = User.objects.create_user(username=username, email=house_mistress.email, password=password)
-            house_mistress.user = user
-            house_mistress.save()
-            # Send email
-            from django.core.mail import send_mail
-            send_mail(
-                'Your Account Details',
-                f'Username: {username}\nPassword: {password}',
-                'admin@example.com',
-                [house_mistress.email],
-                fail_silently=False,
-            )
+class AdminAddViews:
+    def add_student(request):
+        if not request.user.is_staff:
             return redirect('exeat_list')
-    else:
-        form = HouseMistressForm()
-    return render(request, 'exeat_app/add_house_mistress.html', {'form': form})
+        if request.method == 'POST':
+            form = StudentForm(request.POST)
+            if form.is_valid():
+                student = form.save(commit=False)
+                # Create user
+                username = student.student_id  # Use student_id as username
+                password = User.objects.make_random_password()
+                user = User.objects.create_user(username=username, email=student.email, password=password)
+                student.user = user
+                student.save()
+                # Send email
+                from django.core.mail import send_mail
+                send_mail(
+                    'Your Account Details',
+                    f'Username: {username}\nPassword: {password}',
+                    'admin@example.com',
+                    [student.email],
+                    fail_silently=False,
+                )
+                return redirect('exeat_list')
+        else:
+            form = StudentForm()
+        return render(request, 'exeat_app/add_student.html', {'form': form})
+
+    def add_house_mistress(request):
+        if not request.user.is_staff:
+            return redirect('exeat_list')
+        if request.method == 'POST':
+            form = HouseMistressForm(request.POST)
+            if form.is_valid():
+                house_mistress = form.save(commit=False)
+                # Create user
+                username = house_mistress.name.lower().replace(' ', '_')  # Simple username
+                password = User.objects.make_random_password()
+                user = User.objects.create_user(username=username, email=house_mistress.email, password=password)
+                house_mistress.user = user
+                house_mistress.save()
+                # Send email
+                from django.core.mail import send_mail
+                send_mail(
+                    'Your Account Details',
+                    f'Username: {username}\nPassword: {password}',
+                    'admin@example.com',
+                    [house_mistress.email],
+                    fail_silently=False,
+                )
+                return redirect('exeat_list')
+        else:
+            form = HouseMistressForm()
+        return render(request, 'exeat_app/add_house_mistress.html', {'form': form})
 
 @login_required
 def security_sign_out(request, pk):
@@ -270,7 +337,7 @@ class StudentViewSet(viewsets.ModelViewSet):
 
 @login_required
 def add_house(request):
-    if not request.user.is_staff:
+    if not request.user.is_subadmin:
         return redirect('exeat_list')
     if request.method == 'POST':
         form = HouseForm(request.POST)
@@ -370,4 +437,63 @@ class PasswordResetViewSet(viewsets.ViewSet):
             return Response({'status': 'Password reset. Check your email.'})
         except User.DoesNotExist:
             return Response({'error': 'Email not found'}, status=400)
-        
+        return Response(
+                APISuccessResponseStructureSerializer(response_data).data,  
+                status=status.HTTP_200_OK
+            )
+    
+@login_required
+class AdmintDashboardView(APIView):
+    """
+    Admin dashboard showing all complaints across all categories.
+    Admins have full access to view and manage all complaints.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        if request.user.role != "admin":
+            error_data = {
+                "status": 403,
+                "message": "Unauthorized. Admin access required.",
+                "errors": ["You must be an admin to access this resource"]
+            }
+            return Response(
+                APIErrorResponseStructureSerializer(error_data).data,
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        Exeat = Exeat.objects.all()
+
+        # Filter by status
+        status_param = request.query_params.get("status")
+        if status_param:
+            Exeat = Exeat.filter(status=status_param)
+
+        # Filter by category
+        category_param = request.query_params.get("category")
+        if category_param:
+            Exeat = Exeat.filter(category=category_param)
+
+        # Filter by date range
+        start_date = request.query_params.get("start")
+        end_date = request.query_params.get("end")
+        if start_date and end_date:
+            Exeat = Exeat.filter(created_at__date__range=[start_date, end_date])    
+
+        Exeat = Exeat.order_by('-created_at')
+        serializer = ExeatSerializer(Exeat, many=True)
+
+        response_data = {
+            "status": 200,
+            "message": "All complaints retrieved successfully",
+            "data": {
+                "total": Exeat.count(),
+                "complaints": serializer.data
+            }
+        }
+
+        return Response(
+            APISuccessResponseStructureSerializer(response_data).data,
+            status=status.HTTP_200_OK
+        )
+    
