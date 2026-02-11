@@ -1,0 +1,67 @@
+@host = http://localhost:8000
+@contentType = application/json
+
+### Create School
+POST {{host}}/api/schools/
+Content-Type: {{contentType}}
+Authorization: Basic YWRtaW46YWRtaW4xMjM=
+
+{
+  "name": "Federal School",
+  "code": "FED001",
+  "email": "federal@school.com",
+  "phone": "08012345678",
+  "address": "Lagos, Nigeria"
+}
+
+### List Schools
+GET {{host}}/api/schools/
+Content-Type: {{contentType}}
+Authorization: Basic YWRtaW46YWRtaW4xMjM=
+
+### Create Sub Admin (requires school_id from above)
+POST {{host}}/api/subadmin/create_subadmin/
+Content-Type: {{contentType}}
+Authorization: Basic YWRtaW46YWRtaW4xMjM=
+
+{
+  "username": "subadmin1",
+  "email": "subadmin1@school.com",
+  "password": "SubAdmin@123",
+  "school_id": 1
+}
+
+### List Sub Admins
+GET {{host}}/api/subadmin/
+Content-Type: {{contentType}}
+Authorization: Basic YWRtaW46YWRtaW4xMjM=
+
+### Get Dashboard Stats
+GET {{host}}/api/admin/dashboard/
+Content-Type: {{contentType}}
+Authorization: Basic YWRtaW46YWRtaW4xMjM=
+
+### List Students
+GET {{host}}/api/students/
+Content-Type: {{contentType}}
+Authorization: Basic YWRtaW46YWRtaW4xMjM=
+
+### List House Mistresses
+GET {{host}}/api/house-mistresses/
+Content-Type: {{contentType}}
+Authorization: Basic YWRtaW46YWRtaW4xMjM=
+
+### List Security Personnel
+GET {{host}}/api/security-personnel/
+Content-Type: {{contentType}}
+Authorization: Basic YWRtaW46YWRtaW4xMjM=
+
+### List Houses
+GET {{host}}/api/houses/
+Content-Type: {{contentType}}
+Authorization: Basic YWRtaW46YWRtaW4xMjM=
+
+### List Exeats
+GET {{host}}/api/exeats/
+Content-Type: {{contentType}}
+Authorization: Basic YWRtaW46YWRtaW4xMjM=

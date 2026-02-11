@@ -91,13 +91,14 @@ class SubAdminManagementViewSet(viewsets.ViewSet):
                 )
 
             # Check if username/email already exists
-            if User.objects.filter(username=username).exists():
+            CustomUser = get_user_model()
+            if CustomUser.objects.filter(username=username).exists():
                 return Response(
                     {'error': 'Username already exists'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            if User.objects.filter(email=email).exists():
+            if CustomUser.objects.filter(email=email).exists():
                 return Response(
                     {'error': 'Email already exists'},
                     status=status.HTTP_400_BAD_REQUEST
@@ -105,17 +106,16 @@ class SubAdminManagementViewSet(viewsets.ViewSet):
 
             # Create user and sub-admin
             with transaction.atomic():
-                user = User.objects.create_user(
+                user = CustomUser.objects.create_user(
                     username=username,
                     email=email,
                     password=password,
                     first_name=first_name,
                     last_name=last_name,
+                    role='subadmin',
+                    school=school,
                     is_staff=False  # Sub-admin is not Django staff
                 )
-                user.customuser.role = 'subadmin'
-                user.customuser.school = school
-                user.customuser.save()
 
                 sub_admin = SubAdmin.objects.create(
                     user=user,
