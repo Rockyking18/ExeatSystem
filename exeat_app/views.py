@@ -1,499 +1,695 @@
-from linecache import cache
-from urllib import request
-from django import forms
-from django.contrib.auth.decorators import login_required
-from django.contrib.auth.models import User
-from django.shortcuts import render, redirect, get_object_or_404
+from django.contrib.auth import get_user_model, authenticate, login, logout
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from rest_framework import viewsets, permissions, status, views
+from django.db import transaction
+from rest_framework import viewsets, permissions, status
 from rest_framework.views import APIView
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from .models import Exeat, Student, HouseMistress, House
-from .serializers import APIErrorResponseStructureSerializer, APISuccessResponseStructureSerializer, ExeatSerializer, StudentSerializer, HouseMistressSerializer, HouseSerializer, ForgotPasswordSerializer, PasswordResetSerializer    
-from django.contrib.auth import authenticate, login, logout
-from django.core.mail import send_mail
+
+from .models import (Exeat, Student, HouseMistress, House, School, 
+                     SubAdmin, SecurityPerson, CustomUser)
+from .serializers import (
+    ExeatSerializer, StudentSerializer, HouseMistressSerializer, HouseSerializer,
+    ForgotPasswordSerializer, PasswordResetSerializer, SchoolSerializer,
+    SubAdminSerializer, SecurityPersonSerializer,
+    APIErrorResponseStructureSerializer, APISuccessResponseStructureSerializer
+)
+
 import random
-from django.shortcuts import render, redirect
-from .models import CustomUser
-from exeat.settings import AUTH_USER_MODEL
-AUTH_USER_MODEL
+
+User = get_user_model()
 
 
+# ==================== PERMISSIONS ====================
 
-class ExeatForm(forms.ModelForm):
-    class Meta:
-        model = Exeat
-        fields = ['reason', 'start_date', 'end_date']
-
-class StudentForm(forms.ModelForm):
-    class Meta:
-        model = Student
-        fields = ['student_id', 'name', 'email', 'phone', 'house', 'guardian_name', 'guardian_phone', 'photo']
-
-class HouseMistressForm(forms.ModelForm):
-    class Meta:
-        model = HouseMistress
-        fields = ['name', 'email', 'phone', 'house']
-
-class HouseForm(forms.ModelForm):
-    class Meta:
-        model = House
-        fields = ['name', 'description']
+class IsAdmin(permissions.BasePermission):
+    """Only Django admin users"""
+    def has_permission(self, request, view):
+        return request.user and request.user.is_staff
 
 
-
-class LoginView(request):
-    def post(self, request):
-        if request.method == 'POST':
-            username = request.POST['username']
-            password = request.POST['password']
-            user = authenticate(request, username=username, password=password)
-            if user:
-                login(request, user)
-                if user.is_superuser or user.is_staff:
-                    return redirect('admin')
-                elif hasattr(user, 'role') and user.role == 'staff':
-                    return redirect('staff-dashboard')
-                elif hasattr(user, 'role') and user.role == 'student':
-                    return redirect('student-dashboard')
-                elif hasattr(user, 'role') and user.role == 'subadmin':
-                    return redirect('subadmin-dashboard')
-            else:
-                return render(request, 'auth/login.html', {'error': 'Invalid credentials'})
-        return render(request, 'auth/login.html')
+class IsSubAdmin(permissions.BasePermission):
+    """Only Sub-Admin users"""
+    def has_permission(self, request, view):
+        return request.user and hasattr(request.user, 'subadmin_profile')
 
 
-
-def logout_view(request):
-    logout(request)
-    return redirect('login')
-
-    
+class IsAdminOrSubAdmin(permissions.BasePermission):
+    """Admin or Sub-Admin users"""
+    def has_permission(self, request, view):
+        return request.user and (request.user.is_staff or hasattr(request.user, 'subadmin_profile'))
 
 
+# ==================== SCHOOL MANAGEMENT ====================
 
-class ForgotPasswordView(request):
-    def post(self, request):
-        serializer = ForgotPasswordSerializer(data=request.data)
-        if serializer.is_valid():
-            email = serializer.validated_data['email']
+class SchoolViewSet(viewsets.ModelViewSet):
+    """
+    School management - Only accessible to Django admin users
+    Allows creating and managing schools
+    """
+    queryset = School.objects.all()
+    serializer_class = SchoolSerializer
+    permission_classes = [IsAdmin]
+
+
+# ==================== SUB-ADMIN MANAGEMENT ====================
+
+class SubAdminManagementViewSet(viewsets.ViewSet):
+    """
+    SubAdmin creation and management - Only for Django admin
+    """
+    permission_classes = [IsAdmin]
+
+    @action(detail=False, methods=['post'])
+    def create_subadmin(self, request):
+        """Create a new sub-admin for a school"""
         try:
-            user = CustomUser.objects.get(email=email)
-            otp = str(random.randint(100000, 999999))
-            request.session['reset_email'] = email
-            request.session['reset_otp'] = otp
+            username = request.data.get('username')
+            email = request.data.get('email')
+            password = request.data.get('password')
+            first_name = request.data.get('first_name', '')
+            last_name = request.data.get('last_name', '')
+            school_id = request.data.get('school_id')
+            phone = request.data.get('phone', '')
 
-            send_mail(
-                'Your Password Reset OTP',
-                f'Use this OTP to reset your password: {otp}',
-                'noreply@example.com',
-                [email],
-                fail_silently=False,
-            )
-            return redirect('verify_otp') 
-        except User.DoesNotExist:
+            # Validation
+            if not all([username, email, password, school_id]):
+                return Response(
+                    {'error': 'username, email, password, and school_id are required'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Check school exists
+            school = get_object_or_404(School, id=school_id)
+
+            # Check if school already has a sub-admin
+            if SubAdmin.objects.filter(school=school).exists():
+                return Response(
+                    {'error': 'This school already has a sub-admin'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Check if username/email already exists
+            if User.objects.filter(username=username).exists():
+                return Response(
+                    {'error': 'Username already exists'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if User.objects.filter(email=email).exists():
+                return Response(
+                    {'error': 'Email already exists'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Create user and sub-admin
+            with transaction.atomic():
+                user = User.objects.create_user(
+                    username=username,
+                    email=email,
+                    password=password,
+                    first_name=first_name,
+                    last_name=last_name,
+                    is_staff=False  # Sub-admin is not Django staff
+                )
+                user.customuser.role = 'subadmin'
+                user.customuser.school = school
+                user.customuser.save()
+
+                sub_admin = SubAdmin.objects.create(
+                    user=user,
+                    school=school,
+                    phone=phone
+                )
+
             return Response(
-                APIErrorResponseStructureSerializer({
-                    "status": 400,
-                    "message": "Email not found",
-                    "errors": ["No user is associated with this email address."]
-                }).data,
+                {
+                    'message': 'Sub-admin created successfully',
+                    'data': SubAdminSerializer(sub_admin).data
+                },
+                status=status.HTTP_201_CREATED
+            )
+
+        except Exception as e:
+            return Response(
+                {'error': str(e)},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
 
-class ResetPasswordView(request):
-    def post(self, request):
-        serializer = PasswordResetSerializer(data=request.data)
-        if serializer.is_valid():
-            entered_otp = request.POST['otp']
-        session_otp = request.session.get('reset_otp')
-        email = request.session.get('reset_email')
+# ==================== STUDENT MANAGEMENT ====================
 
-        if entered_otp == session_otp and email:
-            if not session_otp:
-                error_data = {
-                "status": 400,
-                "message": "OTP expired or not found",
-                "errors": ["Your reset code has expired. Please request a new one."]
-                }
+class StudentManagementViewSet(viewsets.ModelViewSet):
+    """
+    Student management - Sub-admins can add students to their school
+    """
+    serializer_class = StudentSerializer
+    permission_classes = [IsAdminOrSubAdmin]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_staff:
+            return Student.objects.all()
+        elif hasattr(user, 'subadmin_profile'):
+            school = user.subadmin_profile.school
+            return Student.objects.filter(school=school)
+        return Student.objects.none()
+
+    def create(self, request, *args, **kwargs):
+        """Create a new student"""
+        try:
+            username = request.data.get('username')
+            email = request.data.get('email')
+            password = request.data.get('password')
+            student_id = request.data.get('student_id')
+            name = request.data.get('name')
+            phone = request.data.get('phone', '')
+            house_id = request.data.get('house_id')
+            guardian_name = request.data.get('guardian_name', '')
+            guardian_phone = request.data.get('guardian_phone', '')
+
+            if not all([username, email, password, student_id, name]):
+                return Response(
+                    {'error': 'username, email, password, student_id, and name are required'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Determine school
+            if request.user.is_staff:
+                school_id = request.data.get('school_id')
+                if not school_id:
+                    return Response(
+                        {'error': 'Admin must specify school_id'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                school = get_object_or_404(School, id=school_id)
+            else:
+                school = request.user.subadmin_profile.school
+
+            # Check if student_id already exists in school
+            if Student.objects.filter(school=school, student_id=student_id).exists():
+                return Response(
+                    {'error': 'Student ID already exists in this school'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Check if username/email exists
+            if User.objects.filter(username=username).exists():
+                return Response(
+                    {'error': 'Username already exists'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if User.objects.filter(email=email).exists():
+                return Response(
+                    {'error': 'Email already exists'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Create user and student
+            with transaction.atomic():
+                user = User.objects.create_user(
+                    username=username,
+                    email=email,
+                    password=password
+                )
+                user.customuser.role = 'student'
+                user.customuser.school = school
+                user.customuser.save()
+
+                house = None
+                if house_id:
+                    house = get_object_or_404(House, id=house_id, school=school)
+
+                student = Student.objects.create(
+                    user=user,
+                    school=school,
+                    student_id=student_id,
+                    name=name,
+                    email=email,
+                    phone=phone,
+                    house=house,
+                    guardian_name=guardian_name,
+                    guardian_phone=guardian_phone
+                )
+
             return Response(
-                APIErrorResponseStructureSerializer(error_data).data,
+                {
+                    'message': 'Student created successfully',
+                    'data': StudentSerializer(student).data
+                },
+                status=status.HTTP_201_CREATED
+            )
+
+        except Exception as e:
+            return Response(
+                {'error': str(e)},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        if entered_otp != session_otp:
-            error_data = {
-                "status": 400,
-                "message": "Invalid OTP",
-                "errors": ["The reset code you entered is incorrect. Please check and try again."]
-            }
+
+
+# ==================== HOUSE MISTRESS MANAGEMENT ====================
+
+class HouseMistressManagementViewSet(viewsets.ModelViewSet):
+    """
+    House Mistress management - Sub-admins can add house mistresses to their school
+    """
+    serializer_class = HouseMistressSerializer
+    permission_classes = [IsAdminOrSubAdmin]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_staff:
+            return HouseMistress.objects.all()
+        elif hasattr(user, 'subadmin_profile'):
+            school = user.subadmin_profile.school
+            return HouseMistress.objects.filter(school=school)
+        return HouseMistress.objects.none()
+
+    def create(self, request, *args, **kwargs):
+        """Create a new house mistress"""
+        try:
+            username = request.data.get('username')
+            email = request.data.get('email')
+            password = request.data.get('password')
+            name = request.data.get('name')
+            phone = request.data.get('phone', '')
+            house_id = request.data.get('house_id')
+
+            if not all([username, email, password, name, house_id]):
+                return Response(
+                    {'error': 'username, email, password, name, and house_id are required'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Determine school
+            if request.user.is_staff:
+                school_id = request.data.get('school_id')
+                if not school_id:
+                    return Response(
+                        {'error': 'Admin must specify school_id'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                school = get_object_or_404(School, id=school_id)
+            else:
+                school = request.user.subadmin_profile.school
+
+            # Get house and verify it belongs to the school
+            house = get_object_or_404(House, id=house_id, school=school)
+
+            # Check if house already has a mistress
+            if HouseMistress.objects.filter(house=house).exists():
+                return Response(
+                    {'error': 'This house already has a mistress'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Check if username/email exists
+            if User.objects.filter(username=username).exists():
+                return Response(
+                    {'error': 'Username already exists'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if User.objects.filter(email=email).exists():
+                return Response(
+                    {'error': 'Email already exists'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Create user and house mistress
+            with transaction.atomic():
+                user = User.objects.create_user(
+                    username=username,
+                    email=email,
+                    password=password
+                )
+                user.customuser.role = 'house_mistress'
+                user.customuser.school = school
+                user.customuser.save()
+
+                house_mistress = HouseMistress.objects.create(
+                    user=user,
+                    school=school,
+                    name=name,
+                    email=email,
+                    phone=phone,
+                    house=house
+                )
+
             return Response(
-                APIErrorResponseStructureSerializer(error_data).data,
+                {
+                    'message': 'House mistress created successfully',
+                    'data': HouseMistressSerializer(house_mistress).data
+                },
+                status=status.HTTP_201_CREATED
+            )
+
+        except Exception as e:
+            return Response(
+                {'error': str(e)},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        cache.delete(f"reset_otp_{User.email}")
 
-        response_data = {
-                "status": 200,
-                "message": "Password successfully reset",
-                "data": {
-                    "message": "You can now login with your new password"
-                }
-            }
-        return Response(
-                APISuccessResponseStructureSerializer(response_data).data,
-                status=status.HTTP_200_OK
+
+# ==================== SECURITY PERSONNEL MANAGEMENT ====================
+
+class SecurityPersonManagementViewSet(viewsets.ModelViewSet):
+    """
+    Security Personnel management - Sub-admins can add security staff to their school
+    """
+    serializer_class = SecurityPersonSerializer
+    permission_classes = [IsAdminOrSubAdmin]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_staff:
+            return SecurityPerson.objects.all()
+        elif hasattr(user, 'subadmin_profile'):
+            school = user.subadmin_profile.school
+            return SecurityPerson.objects.filter(school=school)
+        return SecurityPerson.objects.none()
+
+    def create(self, request, *args, **kwargs):
+        """Create a new security person"""
+        try:
+            username = request.data.get('username')
+            email = request.data.get('email')
+            password = request.data.get('password')
+            name = request.data.get('name')
+            phone = request.data.get('phone', '')
+            employee_id = request.data.get('employee_id', '')
+
+            if not all([username, email, password, name]):
+                return Response(
+                    {'error': 'username, email, password, and name are required'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Determine school
+            if request.user.is_staff:
+                school_id = request.data.get('school_id')
+                if not school_id:
+                    return Response(
+                        {'error': 'Admin must specify school_id'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                school = get_object_or_404(School, id=school_id)
+            else:
+                school = request.user.subadmin_profile.school
+
+            # Check if username/email exists
+            if User.objects.filter(username=username).exists():
+                return Response(
+                    {'error': 'Username already exists'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if User.objects.filter(email=email).exists():
+                return Response(
+                    {'error': 'Email already exists'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Create user and security person
+            with transaction.atomic():
+                user = User.objects.create_user(
+                    username=username,
+                    email=email,
+                    password=password
+                )
+                user.customuser.role = 'security'
+                user.customuser.school = school
+                user.customuser.save()
+
+                security_person = SecurityPerson.objects.create(
+                    user=user,
+                    school=school,
+                    name=name,
+                    email=email,
+                    phone=phone,
+                    employee_id=employee_id
+                )
+
+            return Response(
+                {
+                    'message': 'Security person created successfully',
+                    'data': SecurityPersonSerializer(security_person).data
+                },
+                status=status.HTTP_201_CREATED
             )
 
-    error_data = {
-        "status": 400,
-        "message": "Password reset failed",
-        "errors": ""
-    }
+        except Exception as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
 
-@login_required
-def exeat_list(request):
-    user = request.user
-    if user.is_staff:
-        exeats = Exeat.objects.all()
+# ==================== HOUSE MANAGEMENT ====================
+
+class HouseManagementViewSet(viewsets.ModelViewSet):
+    """
+    House management - Sub-admins can create houses for their school
+    """
+    serializer_class = HouseSerializer
+    permission_classes = [IsAdminOrSubAdmin]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_staff:
+            return House.objects.all()
+        elif hasattr(user, 'subadmin_profile'):
+            school = user.subadmin_profile.school
+            return House.objects.filter(school=school)
+        return House.objects.none()
+
+    def create(self, request, *args, **kwargs):
+        """Create a new house"""
+        try:
+            name = request.data.get('name')
+            description = request.data.get('description', '')
+
+            if not name:
+                return Response(
+                    {'error': 'name is required'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Determine school
+            if request.user.is_staff:
+                school_id = request.data.get('school_id')
+                if not school_id:
+                    return Response(
+                        {'error': 'Admin must specify school_id'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                school = get_object_or_404(School, id=school_id)
+            else:
+                school = request.user.subadmin_profile.school
+
+            # Check if house name already exists in school
+            if House.objects.filter(school=school, name=name).exists():
+                return Response(
+                    {'error': 'House already exists in this school'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            house = House.objects.create(
+                school=school,
+                name=name,
+                description=description
+            )
+
+            return Response(
+                {
+                    'message': 'House created successfully',
+                    'data': HouseSerializer(house).data
+                },
+                status=status.HTTP_201_CREATED
+            )
+
+        except Exception as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+
+# ==================== EXEAT MANAGEMENT ====================
+
+class ExeatViewSet(viewsets.ModelViewSet):
+    """
+    Exeat management and approval
+    """
+    serializer_class = ExeatSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_staff:
+            return Exeat.objects.all()
+        elif hasattr(user, 'subadmin_profile'):
+            school = user.subadmin_profile.school
+            return Exeat.objects.filter(school=school)
+        elif hasattr(user, 'housemistress_profile'):
+            house = user.housemistress_profile.house
+            return Exeat.objects.filter(student__house=house)
+        elif hasattr(user, 'security_profile'):
+            school = user.security_profile.school
+            return Exeat.objects.filter(school=school)
+        else:
+            return Exeat.objects.filter(student__user=user)
+
+    @action(detail=True, methods=['post'])
+    def approve(self, request, pk=None):
+        """Approve an exeat"""
+        exeat = self.get_object()
+        user = request.user
+
+        # Check authorization
+        has_permission = (
+            user.is_staff or
+            (hasattr(user, 'subadmin_profile') and user.subadmin_profile.school == exeat.school) or
+            (hasattr(user, 'housemistress_profile') and user.housemistress_profile.house.school == exeat.school)
+        )
+
+        if not has_permission:
+            return Response(
+                {'error': 'Not authorized to approve this exeat'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        exeat.status = 'approved'
+        exeat.approved_by = user
+        exeat.save()
+
+        return Response({
+            'message': 'Exeat approved successfully',
+            'data': ExeatSerializer(exeat).data
+        })
+
+    @action(detail=True, methods=['post'])
+    def reject(self, request, pk=None):
+        """Reject an exeat"""
+        exeat = self.get_object()
+        user = request.user
+
+        # Check authorization
+        has_permission = (
+            user.is_staff or
+            (hasattr(user, 'subadmin_profile') and user.subadmin_profile.school == exeat.school) or
+            (hasattr(user, 'housemistress_profile') and user.housemistress_profile.house.school == exeat.school)
+        )
+
+        if not has_permission:
+            return Response(
+                {'error': 'Not authorized to reject this exeat'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        exeat.status = 'rejected'
+        exeat.save()
+
+        return Response({
+            'message': 'Exeat rejected successfully',
+            'data': ExeatSerializer(exeat).data
+        })
+
+    @action(detail=True, methods=['post'])
+    def sign_out(self, request, pk=None):
+        """Sign out a student (mark as left school)"""
+        exeat = self.get_object()
+        user = request.user
+
+        # Only security can sign out
+        if not (user.is_staff or hasattr(user, 'security_profile')):
+            return Response(
+                {'error': 'Only security personnel can sign out students'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if exeat.status != 'approved':
+            return Response(
+                {'error': 'Only approved exeats can be signed out'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        exeat.status = 'signed_out'
+        exeat.signed_out_by = user
+        exeat.signed_out_time = timezone.now()
+        exeat.save()
+
+        return Response({
+            'message': 'Student signed out successfully',
+            'data': ExeatSerializer(exeat).data
+        })
+
+    @action(detail=True, methods=['post'])
+    def sign_in(self, request, pk=None):
+        """Sign in a student (mark as returned)"""
+        exeat = self.get_object()
+        user = request.user
+
+        # Only security can sign in
+        if not (user.is_staff or hasattr(user, 'security_profile')):
+            return Response(
+                {'error': 'Only security personnel can sign in students'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if exeat.status != 'signed_out':
+            return Response(
+                {'error': 'Only signed out exeats can be signed in'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        exeat.status = 'signed_in'
+        exeat.signed_in_by = user
+        exeat.signed_in_time = timezone.now()
+        exeat.save()
+
+        return Response({
+            'message': 'Student signed in successfully',
+            'data': ExeatSerializer(exeat).data
+        })
+
+
+class AdminDashboardView(APIView):
+    """
+    Admin/SubAdmin dashboard showing exeat statistics
+    """
+    permission_classes = [IsAdminOrSubAdmin]
+
+    def get(self, request):
+        if request.user.is_staff:
+            exeats = Exeat.objects.all()
+            school_name = "All Schools"
+        else:
+            school = request.user.subadmin_profile.school
+            exeats = Exeat.objects.filter(school=school)
+            school_name = school.name
+
         total_exeats = exeats.count()
         approved_exeats = exeats.filter(status='approved').count()
         rejected_exeats = exeats.filter(status='rejected').count()
         pending_exeats = exeats.filter(status='pending').count()
-        context = {
-            'exeats': exeats,
-            'total_exeats': total_exeats,
-            'approved_exeats': approved_exeats,
-            'rejected_exeats': rejected_exeats,
-            'pending_exeats': pending_exeats,
-        }
-    elif HouseMistress.objects.filter(user=user).exists():
-        house_mistress = HouseMistress.objects.get(user=user)
-        exeats = Exeat.objects.filter(student__house=house_mistress.house)
-        context = {'exeats': exeats, 'is_house_mistress': True}
-    else:
-        student = get_object_or_404(Student, user=user)
-        exeats = Exeat.objects.filter(student=student)
-        context = {'exeats': exeats}
-    return render(request, 'exeat_app/exeat_list.html', context)
-
-@login_required
-def exeat_create(request):
-    if request.method == 'POST':
-        form = ExeatForm(request.POST)
-        if form.is_valid():
-            exeat = form.save(commit=False)
-            exeat.student = get_object_or_404(Student, user=request.user)
-            exeat.save()
-            return redirect('exeat_list')
-    else:
-        form = ExeatForm()
-    return render(request, 'exeat_app/exeat_form.html', {'form': form})
-
-@login_required
-def exeat_detail(request, pk):
-    exeat = get_object_or_404(Exeat, pk=pk)
-    return render(request, 'exeat_app/exeat_detail.html', {'exeat': exeat})
-
-@login_required
-def exeat_approve(request, pk):
-    user = request.user
-    exeat = get_object_or_404(Exeat, pk=pk)
-    if user.is_staff or (HouseMistress.objects.filter(user=user, house=exeat.student.house).exists()):
-        exeat.status = 'approved'
-        exeat.approved_by = user
-        exeat.save()
-    return redirect('exeat_list')
-
-
-@login_required
-class AdminAddViews:
-    def add_student(request):
-        if not request.user.is_staff:
-            return redirect('exeat_list')
-        if request.method == 'POST':
-            form = StudentForm(request.POST)
-            if form.is_valid():
-                student = form.save(commit=False)
-                # Create user
-                username = student.student_id  # Use student_id as username
-                password = User.objects.make_random_password()
-                user = User.objects.create_user(username=username, email=student.email, password=password)
-                student.user = user
-                student.save()
-                # Send email
-                from django.core.mail import send_mail
-                send_mail(
-                    'Your Account Details',
-                    f'Username: {username}\nPassword: {password}',
-                    'admin@example.com',
-                    [student.email],
-                    fail_silently=False,
-                )
-                return redirect('exeat_list')
-        else:
-            form = StudentForm()
-        return render(request, 'exeat_app/add_student.html', {'form': form})
-
-    def add_house_mistress(request):
-        if not request.user.is_staff:
-            return redirect('exeat_list')
-        if request.method == 'POST':
-            form = HouseMistressForm(request.POST)
-            if form.is_valid():
-                house_mistress = form.save(commit=False)
-                # Create user
-                username = house_mistress.name.lower().replace(' ', '_')  # Simple username
-                password = User.objects.make_random_password()
-                user = User.objects.create_user(username=username, email=house_mistress.email, password=password)
-                house_mistress.user = user
-                house_mistress.save()
-                # Send email
-                from django.core.mail import send_mail
-                send_mail(
-                    'Your Account Details',
-                    f'Username: {username}\nPassword: {password}',
-                    'admin@example.com',
-                    [house_mistress.email],
-                    fail_silently=False,
-                )
-                return redirect('exeat_list')
-        else:
-            form = HouseMistressForm()
-        return render(request, 'exeat_app/add_house_mistress.html', {'form': form})
-
-@login_required
-def security_sign_out(request, pk):
-    if not request.user.groups.filter(name='Security').exists() and not request.user.is_staff:
-        return redirect('exeat_list')
-    exeat = get_object_or_404(Exeat, pk=pk, status='approved')
-    if request.method == 'POST':
-        exeat.status = 'signed_out'
-        exeat.signed_out_by = request.user
-        exeat.signed_out_time = timezone.now()
-        exeat.save()
-        return redirect('security_dashboard')
-    return render(request, 'exeat_app/security_sign_out.html', {'exeat': exeat})
-
-@login_required
-def security_sign_in(request, pk):
-    if not request.user.groups.filter(name='Security').exists() and not request.user.is_staff:
-        return redirect('exeat_list')
-    exeat = get_object_or_404(Exeat, pk=pk, status='signed_out')
-    if request.method == 'POST':
-        exeat.status = 'signed_in'
-        exeat.signed_in_by = request.user
-        exeat.signed_in_time = timezone.now()
-        exeat.save()
-        return redirect('security_dashboard')
-    return render(request, 'exeat_app/security_sign_in.html', {'exeat': exeat})
-
-@login_required
-def security_dashboard(request):
-    if not request.user.groups.filter(name='Security').exists() and not request.user.is_staff:
-        return redirect('exeat_list')
-    exeats = Exeat.objects.filter(status__in=['approved', 'signed_out'])
-    return render(request, 'exeat_app/security_dashboard.html', {'exeats': exeats})
-
-# API Views
-class ExeatViewSet(viewsets.ModelViewSet):
-    queryset = Exeat.objects.all()
-    serializer_class = ExeatSerializer
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get_queryset(self):
-        user = self.request.user
-        if user.is_staff:
-            return Exeat.objects.all()
-        elif HouseMistress.objects.filter(user=user).exists():
-            house_mistress = HouseMistress.objects.get(user=user)
-            return Exeat.objects.filter(student__house=house_mistress.house)
-        else:
-            student = get_object_or_404(Student, user=user)
-            return Exeat.objects.filter(student=student)
-
-    @action(detail=True, methods=['post'])
-    def approve(self, request, pk=None):
-        user = request.user
-        exeat = self.get_object()
-        if user.is_staff or (HouseMistress.objects.filter(user=user, house=exeat.student.house).exists()):
-            exeat.status = 'approved'
-            exeat.approved_by = user
-            exeat.save()
-            return Response({'status': 'approved'})
-        return Response({'error': 'Not authorized'}, status=403)
-
-class StudentViewSet(viewsets.ModelViewSet):
-    queryset = Student.objects.all()
-    serializer_class = StudentSerializer
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get_queryset(self):
-        if self.request.user.is_staff:
-            return Student.objects.all()
-        return Student.objects.filter(user=self.request.user)
-
-@login_required
-def add_house(request):
-    if not request.user.is_subadmin:
-        return redirect('exeat_list')
-    if request.method == 'POST':
-        form = HouseForm(request.POST)
-        if form.is_valid():
-            form.save()
-            return redirect('exeat_list')
-    else:
-        form = HouseForm()
-    return render(request, 'exeat_app/add_house.html', {'form': form})
-
-# API Views
-class ExeatViewSet(viewsets.ModelViewSet):
-    queryset = Exeat.objects.all()
-    serializer_class = ExeatSerializer
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get_queryset(self):
-        user = self.request.user
-        if user.is_staff:
-            return Exeat.objects.all()
-        elif HouseMistress.objects.filter(user=user).exists():
-            house_mistress = HouseMistress.objects.get(user=user)
-            return Exeat.objects.filter(student__house=house_mistress.house)
-        else:
-            student = get_object_or_404(Student, user=user)
-            return Exeat.objects.filter(student=student)
-
-    @action(detail=True, methods=['post'])
-    def approve(self, request, pk=None):
-        user = request.user
-        exeat = self.get_object()
-        if user.is_staff or (HouseMistress.objects.filter(user=user, house=exeat.student.house).exists()):
-            exeat.status = 'approved'
-            exeat.approved_by = user
-            exeat.save()
-            return Response({'status': 'approved'})
-        return Response({'error': 'Not authorized'}, status=403)
-
-class StudentViewSet(viewsets.ModelViewSet):
-    queryset = Student.objects.all()
-    serializer_class = StudentSerializer
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get_queryset(self):
-        if self.request.user.is_staff:
-            return Student.objects.all()
-        return Student.objects.filter(user=self.request.user)
-
-class HouseViewSet(viewsets.ModelViewSet):
-    queryset = House.objects.all()
-    serializer_class = HouseSerializer
-    permission_classes = [permissions.IsAuthenticated]
-
-
-class LoginViewSet(viewsets.ViewSet):
-    permission_classes = [permissions.AllowAny]
-
-    @action(detail=False, methods=['post'])
-    def login(self, request):
-        username = request.data.get('username')
-        password = request.data.get('password')
-        user = authenticate(request, username=username, password=password)
-        if user:
-            login(request, user)
-            return Response({'status': 'logged in'})
-        return Response({'error': 'Invalid credentials'}, status=400)
-    
-
-
-class LogoutViewSet(viewsets.ViewSet):
-    permission_classes = [permissions.IsAuthenticated]
-
-    @action(detail=False, methods=['post'])
-    def logout(self, request):
-        logout(request)
-        return Response({'status': 'logged out'})
-    
-class PasswordResetViewSet(viewsets.ViewSet):
-    permission_classes = [permissions.AllowAny]
-
-    @action(detail=False, methods=['post'])
-    def reset(self, request):
-        email = request.data.get('email')
-        try:
-            user = User.objects.get(email=email)
-            new_password = User.objects.make_random_password()
-            user.set_password(new_password)
-            user.save()
-            from django.core.mail import send_mail
-            send_mail(
-                'Password Reset',
-                f'Your new password is: {new_password}',
-                '<EMAIL>',
-                [email],    
-                fail_silently=False,
-            )       
-            return Response({'status': 'Password reset. Check your email.'})
-        except User.DoesNotExist:
-            return Response({'error': 'Email not found'}, status=400)
-        return Response(
-                APISuccessResponseStructureSerializer(response_data).data,  
-                status=status.HTTP_200_OK
-            )
-    
-@login_required
-class AdmintDashboardView(APIView):
-    """
-    Admin dashboard showing all complaints across all categories.
-    Admins have full access to view and manage all complaints.
-    """
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get(self, request):
-        if request.user.role != "admin":
-            error_data = {
-                "status": 403,
-                "message": "Unauthorized. Admin access required.",
-                "errors": ["You must be an admin to access this resource"]
-            }
-            return Response(
-                APIErrorResponseStructureSerializer(error_data).data,
-                status=status.HTTP_403_FORBIDDEN
-            )
-
-        Exeat = Exeat.objects.all()
-
-        # Filter by status
-        status_param = request.query_params.get("status")
-        if status_param:
-            Exeat = Exeat.filter(status=status_param)
-
-        # Filter by category
-        category_param = request.query_params.get("category")
-        if category_param:
-            Exeat = Exeat.filter(category=category_param)
-
-        # Filter by date range
-        start_date = request.query_params.get("start")
-        end_date = request.query_params.get("end")
-        if start_date and end_date:
-            Exeat = Exeat.filter(created_at__date__range=[start_date, end_date])    
-
-        Exeat = Exeat.order_by('-created_at')
-        serializer = ExeatSerializer(Exeat, many=True)
+        signed_out_exeats = exeats.filter(status='signed_out').count()
+        signed_in_exeats = exeats.filter(status='signed_in').count()
 
         response_data = {
             "status": 200,
-            "message": "All complaints retrieved successfully",
+            "message": f"Dashboard data for {school_name}",
             "data": {
-                "total": Exeat.count(),
-                "complaints": serializer.data
+                "school": school_name,
+                "total_exeats": total_exeats,
+                "approved": approved_exeats,
+                "rejected": rejected_exeats,
+                "pending": pending_exeats,
+                "signed_out": signed_out_exeats,
+                "signed_in": signed_in_exeats,
             }
         }
 
-        return Response(
-            APISuccessResponseStructureSerializer(response_data).data,
-            status=status.HTTP_200_OK
-        )
-    
+        return Response(response_data, status=status.HTTP_200_OK)
