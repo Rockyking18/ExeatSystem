@@ -136,3 +136,7 @@ dmypy.json
 # OS
 .DS_Store
 Thumbs.db
+
+# REST Client - contains sensitive credentials
+api-test.rest
+api-test.rest.example

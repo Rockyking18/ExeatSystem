@@ -22,4 +22,7 @@ router.register(r'exeats', views.ExeatViewSet, basename='exeat')
 urlpatterns = [
     path('api/', include(router.urls)),
     path('api/admin-dashboard/', views.AdminDashboardView.as_view(), name='admin_dashboard'),
+    # Custom school endpoints
+    path('api/schools/list/', views.SchoolViewSet.as_view({'get': 'list_schools'}), name='list_schools'),
+    path('api/schools/create/', views.SchoolViewSet.as_view({'post': 'create_school'}), name='create_school'),
 ]

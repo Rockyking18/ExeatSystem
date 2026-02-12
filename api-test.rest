@@ -2,7 +2,7 @@
 @contentType = application/json
 
 ### Create School
-POST {{host}}/api/schools/
+POST {{host}}/api/schools/create/
 Content-Type: {{contentType}}
 Authorization: Basic YWRtaW46YWRtaW4xMjM=
 
@@ -15,7 +15,7 @@ Authorization: Basic YWRtaW46YWRtaW4xMjM=
 }
 
 ### List Schools
-GET {{host}}/api/schools/
+GET {{host}}/api/schools/list/
 Content-Type: {{contentType}}
 Authorization: Basic YWRtaW46YWRtaW4xMjM=
 

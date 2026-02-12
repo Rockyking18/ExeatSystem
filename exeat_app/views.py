@@ -52,6 +52,22 @@ class SchoolViewSet(viewsets.ModelViewSet):
     serializer_class = SchoolSerializer
     permission_classes = [IsAdmin]
 
+    @action(detail=False, methods=['get'])
+    def list_schools(self, request):
+        """List all schools"""
+        schools = School.objects.all()
+        serializer = SchoolSerializer(schools, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['post'])
+    def create_school(self, request):
+        """Create a new school"""
+        serializer = SchoolSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
 
 # ==================== SUB-ADMIN MANAGEMENT ====================
 
