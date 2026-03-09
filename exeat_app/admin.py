@@ -3,7 +3,7 @@ from django.utils.html import format_html
 from .models import Student, Exeat, HouseMistress, House, School, SubAdmin, SecurityPerson
 
 
-# ==================== SCHOOL ADMIN ====================
+#  SCHOOL ADMIN 
 
 @admin.register(School)
 class SchoolAdmin(admin.ModelAdmin):
@@ -25,7 +25,7 @@ class SchoolAdmin(admin.ModelAdmin):
     readonly_fields = ('created_at', 'updated_at')
 
 
-# ==================== SUB-ADMIN ADMIN ====================
+# SUB-ADMIN ADMIN
 
 @admin.register(SubAdmin)
 class SubAdminAdmin(admin.ModelAdmin):
@@ -48,7 +48,7 @@ class SubAdminAdmin(admin.ModelAdmin):
     get_user_name.short_description = 'Name'
 
 
-# ==================== HOUSE ADMIN ====================
+# HOUSE ADMIN 
 
 @admin.register(House)
 class HouseAdmin(admin.ModelAdmin):
@@ -67,7 +67,7 @@ class HouseAdmin(admin.ModelAdmin):
     readonly_fields = ('created_at', 'updated_at')
 
 
-# ==================== STUDENT ADMIN ====================
+#STUDENT ADMIN
 
 @admin.register(Student)
 class StudentAdmin(admin.ModelAdmin):
@@ -95,7 +95,7 @@ class StudentAdmin(admin.ModelAdmin):
     readonly_fields = ('created_at', 'updated_at', 'user')
 
 
-# ==================== HOUSE MISTRESS ADMIN ====================
+# HOUSE MISTRESS ADMIN 
 
 @admin.register(HouseMistress)
 class HouseMistressAdmin(admin.ModelAdmin):
@@ -120,7 +120,7 @@ class HouseMistressAdmin(admin.ModelAdmin):
     readonly_fields = ('created_at', 'updated_at', 'user')
 
 
-# ==================== SECURITY PERSON ADMIN ====================
+# SECURITY PERSON ADMIN 
 
 @admin.register(SecurityPerson)
 class SecurityPersonAdmin(admin.ModelAdmin):
@@ -142,7 +142,7 @@ class SecurityPersonAdmin(admin.ModelAdmin):
     readonly_fields = ('created_at', 'updated_at', 'user')
 
 
-# ==================== EXEAT ADMIN ====================
+# EXEAT ADMIN
 
 @admin.register(Exeat)
 class ExeatAdmin(admin.ModelAdmin):

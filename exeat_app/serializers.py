@@ -142,6 +142,12 @@ class PasswordResetSerializer(serializers.Serializer):
     new_password = serializers.CharField(min_length=8)
 
 
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    uid = serializers.CharField()
+    token = serializers.CharField()
+    new_password = serializers.CharField(min_length=8)
+
+
 class APISuccessResponseStructureSerializer(serializers.Serializer):
     """Standard structure for API success responses"""
     status = serializers.IntegerField()

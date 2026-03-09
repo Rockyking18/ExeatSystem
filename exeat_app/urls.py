@@ -25,4 +25,7 @@ urlpatterns = [
     # Custom school endpoints
     path('api/schools/list/', views.SchoolViewSet.as_view({'get': 'list_schools'}), name='list_schools'),
     path('api/schools/create/', views.SchoolViewSet.as_view({'post': 'create_school'}), name='create_school'),
+    # Password reset API endpoints
+    path('api/auth/forgot-password/', views.ForgotPasswordAPIView.as_view(), name='forgot_password'),
+    path('api/auth/reset-password/', views.PasswordResetConfirmAPIView.as_view(), name='password_reset_confirm'),
 ]
